@@ -1,0 +1,6 @@
+name = "nvidia-nim-openai-proxy"
+main = "src/index.ts"
+compatibility_date = "2026-10-13"
+
+[observability]
+enabled = true
