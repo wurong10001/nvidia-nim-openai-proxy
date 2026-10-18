@@ -1,6 +1,16 @@
 interface Env {
+  ADMIN_KV: KVNamespace;
+  ADMIN_TEMP_KV: KVNamespace;
+}
+
+async function md5Hash(plain: string): Promise<string> {
+  const buf = new TextEncoder().encode(plain);
+  const digest = await crypto.subtle.digest('MD5', buf);
+  const hash = Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2,'0')).join('');
+  return hash;
+}
   NIM_API_KEY: string;
-  GATEWAY_API_KEY: string;
+  // GATEWAY_API_KEY removed; API key comes from request header
   NIM_BASE_URL?: string;
   ALLOWED_ORIGIN?: string;
 }
@@ -115,7 +125,88 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
     return Response.json({ status: "ok" }, { headers: { "Cache-Control": "no-store" } });
   }
 
-  const methods = ALLOWED_ROUTES.get(url.pathname);
+  const cors = corsHeaders(request, env);
+// Serve admin dashboard
+if (url.pathname.startsWith("/op/admin")) {
+  const adminPage = `<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>Admin Dashboard</title></head>
+<body>
+<h1>Admin Dashboard</h1>
+<div id="app"></div>
+<script>
+async function loadData() {
+  try {
+    const res = await fetch("/op/api/test");
+    const data = await res.json();
+    document.getElementById("app").innerText = JSON.stringify(data);
+  } catch (e) {
+    document.getElementById("app").innerText = "Error loading data";
+  }
+}
+loadData();
+</script>
+</body>
+</html>`;
+  return new Response(adminPage, { headers: cors, status: 200 });
+}
+// Simple admin API
+if (url.pathname.startsWith("/op/api")) {
+  const subpath = url.pathname.replace("/op/api", "");
+  const contentType = request.headers.get("Content-Type") || "";
+  if (subpath === "/set-admin-pw" && request.method === "POST") {
+    const body = await request.json();
+    const plainPwd = body.password;
+    if (!plainPwd) {
+      return jsonError(400, "Password required");
+    }
+    const hashed = await md5Hash(plainPwd);
+    const existing = await env.ADMIN_KV.get("ADMIN_PASSWORD");
+    if (existing) {
+      return jsonError(409, "Admin password already set");
+    }
+    await env.ADMIN_KV.put("ADMIN_PASSWORD", hashed);
+    return new Response(JSON.stringify({status:"ok"}), { headers: cors, status: 200 });
+  }
+  if (subpath === "/change-admin-pw" && request.method === "POST") {
+    const token = request.headers.get("X-Admin-Token");
+    if (!token) return jsonError(401, "Missing admin token");
+    const tokenExists = await env.ADMIN_TEMP_KV.get(token);
+    if (!tokenExists) return jsonError(403, "Invalid token");
+    const body = await request.json();
+    const oldPwd = body.oldPassword;
+    const newPwd = body.newPassword;
+    if (!oldPwd || !newPwd) {
+      return jsonError(400, "Old and new passwords required");
+    }
+    const oldHashed = await md5Hash(oldPwd);
+    const stored = await env.ADMIN_KV.get("ADMIN_PASSWORD");
+    if (oldHashed !== stored) return jsonError(403, "Old password incorrect");
+    const newHashed = await md5Hash(newPwd);
+    await env.ADMIN_KV.put("ADMIN_PASSWORD", newHashed);
+    return new Response(JSON.stringify({status:"ok"}), { headers: cors, status: 200 });
+  }
+  if (subpath === "/login" && request.method === "POST") {
+    const body = await request.json();
+    const pwd = body.password;
+    if (!pwd) return jsonError(400, "Password required");
+    const hashed = await md5Hash(pwd);
+    const stored = await env.ADMIN_KV.get("ADMIN_PASSWORD");
+    if (hashed !== stored) return jsonError(401, "Invalid password");
+    const uuid = crypto.randomUUID();
+    await env.ADMIN_TEMP_KV.put(uuid, "admin");
+    return new Response(JSON.stringify({token: uuid}), { headers: cors, status:200 });
+  }
+  if (subpath === "/protected" && request.method === "GET") {
+    const token = request.headers.get("X-Admin-Token");
+    if (!token) return jsonError(401, "Missing token");
+    const tokenExists = await env.ADMIN_TEMP_KV.get(token);
+    if (!tokenExists) return jsonError(403, "Invalid token");
+    return new Response(JSON.stringify({status:"access granted"}), { headers: cors, status:200 });
+  }
+  return jsonError(404, "API endpoint not found");
+}
+const methods = ALLOWED_ROUTES.get(url.pathname);
   if (!methods) {
     return jsonError(404, "Endpoint not found");
   }
@@ -131,11 +222,20 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
   if (!methods.includes(request.method)) {
     return jsonError(405, "Method not allowed");
   }
-  if (!env.GATEWAY_API_KEY || !env.NIM_API_KEY) {
-    return jsonError(503, "Proxy credentials are not configured");
-  }
-  if (!authorized(request, env.GATEWAY_API_KEY)) {
-    return jsonError(401, "Invalid or missing API key");
+  // Determine NIM API key: env or request header
+  let nimKey: string | undefined;
+  if (env.NIM_API_KEY) {
+    nimKey = env.NIM_API_KEY;
+  } else {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader) {
+      return jsonError(401, "Missing API key");
+    }
+    const match = /^Bearer\s+(.+)$/i.exec(authHeader);
+    nimKey = match?.[1];
+    if (!nimKey) {
+      return jsonError(401, "Invalid API key format");
+    }
   }
 
   let upstreamUrl: URL;
@@ -154,7 +254,7 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
     headers.delete(name);
   }
   headers.delete("authorization");
-  headers.set("Authorization", `Bearer ${env.NIM_API_KEY}`);
+  headers.set("Authorization", `Bearer ${nimKey}`);
   headers.set("Cache-Control", "no-store");
 
   let upstream: Response;
