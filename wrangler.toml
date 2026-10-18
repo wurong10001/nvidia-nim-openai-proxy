@@ -1,6 +1,10 @@
 name = "nvidia-nim-openai-proxy"
+account_id = "YOUR_ACCOUNT_ID"
+# zone_id omitted; specify via "route = \"YOUR_DOMAIN/*\"" when deploying to production
 main = "src/index.ts"
 compatibility_date = "2026-10-13"
+# route = "YOUR_DOMAIN/*" # set after domain configured in Cloudflare
+# workers_dev = false  # uncomment if you want production route
 
 [observability]
 enabled = true
