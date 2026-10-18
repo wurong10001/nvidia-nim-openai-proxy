@@ -1,5 +1,5 @@
 name = "nvidia-nim-openai-proxy"
-account_id = "YOUR_ACCOUNT_ID"
+# account_id set via CF_ACCOUNT_ID env variable in CI
 # zone_id omitted; specify via "route = \"YOUR_DOMAIN/*\"" when deploying to production
 main = "src/index.ts"
 compatibility_date = "2026-10-13"
