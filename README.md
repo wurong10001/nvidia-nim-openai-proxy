@@ -14,7 +14,7 @@
 
 ## 部署
 
-1. 安装 Node.js 20+，然后运行 `npm ci`。
+1. 安装 Node.js 22+（wrangler 4.x 最低要求），然后运行 `npm ci`。
 2. 登录 Cloudflare：`npx wrangler login`。
 3. （可选）设置上游 NIM API Key：`npx wrangler secret put NIM_API_KEY`。
 4. 部署：`npm run deploy`。

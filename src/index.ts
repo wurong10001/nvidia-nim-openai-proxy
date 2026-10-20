@@ -119,6 +119,12 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
   }
 
   const cors = corsHeaders(request, env);
+// Admin dashboard and APIs require the KV storage bindings.
+if (url.pathname.startsWith("/op/admin") || url.pathname.startsWith("/op/api")) {
+  if (!env.ADMIN_KV || !env.ADMIN_TEMP_KV) {
+    return jsonError(503, "Admin storage not configured");
+  }
+}
 // Serve admin dashboard
 if (url.pathname.startsWith("/op/admin")) {
   const adminPage = `<!DOCTYPE html>

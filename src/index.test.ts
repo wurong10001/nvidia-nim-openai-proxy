@@ -134,6 +134,18 @@ describe("NVIDIA NIM OpenAI-compatible proxy", () => {
     expect(upstream).not.toHaveBeenCalled();
   });
 
+  it("returns 503 for admin routes when KV storage is not configured", async () => {
+    const response = await handleRequest(
+      new Request("https://proxy.example/op/api/protected"),
+      makeEnv({ ADMIN_KV: undefined }),
+    );
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      error: { message: "Admin storage not configured" },
+    });
+  });
+
   it("answers health checks without revealing credential configuration", async () => {
     const response = await handleRequest(
       new Request("https://proxy.example/health"),
