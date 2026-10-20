@@ -25,7 +25,7 @@
 
 - `NIM_BASE_URL`：NIM 上游 HTTPS origin，默认 `https://integrate.api.nvidia.com`。只能配置 origin，不可附加路径、查询参数或凭证。
 - `ALLOWED_ORIGIN`：限制浏览器 CORS 来源；未配置时返回 `Access-Control-Allow-Origin: *`。此设置不是 API 认证的替代品。
-- KV namespace：管理面板需要 `ADMIN_KV` 与 `ADMIN_TEMP_KV` 两个 KV 绑定。部署前先创建（`npx wrangler kv namespace create ADMIN_KV` 与 `ADMIN_TEMP_KV`），把输出的 ID 填入 `wrangler.toml` 中对应的 `id` / `preview_id`。
+- KV namespace：管理面板需要 `ADMIN_KV` 与 `ADMIN_TEMP_KV` 两个 KV 绑定，当前在 `wrangler.toml` 中为注释状态——未配置时 `/op/admin` 与 `/op/api/*` 返回 503，代理功能不受影响。在 Cloudflare 面板创建这两个 namespace 后，取消注释并填入真实 ID 即可启用。
 
 ## 使用
 
