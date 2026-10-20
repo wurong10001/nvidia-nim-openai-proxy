@@ -16,27 +16,28 @@
 
 1. 安装 Node.js 20+，然后运行 `npm ci`。
 2. 登录 Cloudflare：`npx wrangler login`。
-3. 设置上游 NIM API Key：`npx wrangler secret put NIM_API_KEY`。
-4. 设置客户端调用此代理时使用的独立密钥：`npx wrangler secret put GATEWAY_API_KEY`。
-5. 部署：`npm run deploy`。
+3. （可选）设置上游 NIM API Key：`npx wrangler secret put NIM_API_KEY`。
+4. 部署：`npm run deploy`。
 
-不要将这两个密钥提交到 Git。`GATEWAY_API_KEY` 未设置时，代理拒绝转发请求，避免部署成任何人都能使用的开放代理。
+密钥解析规则：设置了 `NIM_API_KEY` 时，所有请求共用该 key 访问 NIM，客户端无需携带密钥——此时 Worker 地址本身就是凭证，切勿公开；未设置时，客户端必须在请求头 `Authorization: Bearer <nim-key>` 中自带 NIM key。不要将任何密钥提交到 Git。
 
 可选配置：
 
 - `NIM_BASE_URL`：NIM 上游 HTTPS origin，默认 `https://integrate.api.nvidia.com`。只能配置 origin，不可附加路径、查询参数或凭证。
 - `ALLOWED_ORIGIN`：限制浏览器 CORS 来源；未配置时返回 `Access-Control-Allow-Origin: *`。此设置不是 API 认证的替代品。
+- KV namespace：管理面板需要 `ADMIN_KV` 与 `ADMIN_TEMP_KV` 两个 KV 绑定。部署前先创建（`npx wrangler kv namespace create ADMIN_KV` 与 `ADMIN_TEMP_KV`），把输出的 ID 填入 `wrangler.toml` 中对应的 `id` / `preview_id`。
 
 ## 使用
 
-将 OpenAI SDK 的 `baseURL` 指向 Worker 地址，并将代理密钥作为 SDK API Key：
+将 OpenAI SDK 的 `baseURL` 指向 Worker 地址，并按上面的密钥解析规则提供 API Key：
 
 ```js
 import OpenAI from "openai";
 
 const client = new OpenAI({
   baseURL: "https://<worker-name>.<account>.workers.dev/v1",
-  apiKey: process.env.GATEWAY_API_KEY,
+  // 部署了 NIM_API_KEY 时此处可填任意占位值；否则填入客户端自己的 NIM key
+  apiKey: process.env.NIM_API_KEY ?? "placeholder",
 });
 
 const stream = await client.chat.completions.create({
@@ -52,13 +53,23 @@ for await (const chunk of stream) {
 
 模型名称及请求字段应使用 NVIDIA NIM 支持的值。可通过 `/v1/models` 查询上游可用模型。
 
+## 管理面板
+
+Worker 内置一组管理端点（依赖上述两个 KV namespace）：
+
+- `GET /op/admin`：面板页面
+- `POST /op/api/set-admin-pw`：首次设置管理员密码（已设置后返回 409）
+- `POST /op/api/login`：登录，返回会话 token
+- `POST /op/api/change-admin-pw`：修改密码（需 `X-Admin-Token` 头）
+- `GET /op/api/protected`：鉴权测试端点
+
 ## 本地开发与检查
 
 在项目根目录创建 `.dev.vars`（勿提交）：
 
 ```dotenv
+# 可选：不设置则请求需在 Authorization 头中自带 NIM key
 NIM_API_KEY=your-nvidia-nim-key
-GATEWAY_API_KEY=your-private-client-key
 ```
 
 运行 `npm run dev`、`npm run typecheck` 和 `npm test`。
@@ -70,4 +81,4 @@ GATEWAY_API_KEY=your-private-client-key
 - `CLOUDFLARE_API_TOKEN`：拥有此 Worker 部署权限的 Cloudflare API Token。
 - `CLOUDFLARE_ACCOUNT_ID`：Cloudflare Account ID。
 
-`NIM_API_KEY` 和 `GATEWAY_API_KEY` 仍应使用 `wrangler secret put` 配置在 Cloudflare Worker，而不是放进 GitHub Actions。
+`NIM_API_KEY`（如使用）仍应使用 `wrangler secret put` 配置在 Cloudflare Worker，而不是放进 GitHub Actions。

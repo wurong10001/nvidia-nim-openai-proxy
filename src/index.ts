@@ -1,6 +1,11 @@
-interface Env {
+export interface Env {
   ADMIN_KV: KVNamespace;
   ADMIN_TEMP_KV: KVNamespace;
+  // Optional: shared upstream key. When unset, clients must supply their own.
+  NIM_API_KEY?: string;
+  // GATEWAY_API_KEY removed; API key comes from request header
+  NIM_BASE_URL?: string;
+  ALLOWED_ORIGIN?: string;
 }
 
 async function md5Hash(plain: string): Promise<string> {
@@ -8,11 +13,6 @@ async function md5Hash(plain: string): Promise<string> {
   const digest = await crypto.subtle.digest('MD5', buf);
   const hash = Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2,'0')).join('');
   return hash;
-}
-  NIM_API_KEY: string;
-  // GATEWAY_API_KEY removed; API key comes from request header
-  NIM_BASE_URL?: string;
-  ALLOWED_ORIGIN?: string;
 }
 
 const DEFAULT_NIM_BASE_URL = "https://integrate.api.nvidia.com";
@@ -83,13 +83,6 @@ function corsHeaders(request: Request, env: Env): Headers {
   return headers;
 }
 
-function authorized(request: Request, gatewayKey: string): boolean {
-  const match = /^Bearer\s+(.+)$/i.exec(
-    request.headers.get("Authorization") ?? "",
-  );
-  return match?.[1] === gatewayKey;
-}
-
 function createUpstreamUrl(pathname: string, search: string, base: string): URL {
   const url = new URL(base);
   if (
@@ -153,9 +146,8 @@ loadData();
 // Simple admin API
 if (url.pathname.startsWith("/op/api")) {
   const subpath = url.pathname.replace("/op/api", "");
-  const contentType = request.headers.get("Content-Type") || "";
   if (subpath === "/set-admin-pw" && request.method === "POST") {
-    const body = await request.json();
+    const body = (await request.json()) as { password?: string };
     const plainPwd = body.password;
     if (!plainPwd) {
       return jsonError(400, "Password required");
@@ -173,7 +165,7 @@ if (url.pathname.startsWith("/op/api")) {
     if (!token) return jsonError(401, "Missing admin token");
     const tokenExists = await env.ADMIN_TEMP_KV.get(token);
     if (!tokenExists) return jsonError(403, "Invalid token");
-    const body = await request.json();
+    const body = (await request.json()) as { oldPassword?: string; newPassword?: string };
     const oldPwd = body.oldPassword;
     const newPwd = body.newPassword;
     if (!oldPwd || !newPwd) {
@@ -187,7 +179,7 @@ if (url.pathname.startsWith("/op/api")) {
     return new Response(JSON.stringify({status:"ok"}), { headers: cors, status: 200 });
   }
   if (subpath === "/login" && request.method === "POST") {
-    const body = await request.json();
+    const body = (await request.json()) as { password?: string };
     const pwd = body.password;
     if (!pwd) return jsonError(400, "Password required");
     const hashed = await md5Hash(pwd);
@@ -211,7 +203,6 @@ const methods = ALLOWED_ROUTES.get(url.pathname);
     return jsonError(404, "Endpoint not found");
   }
 
-  const cors = corsHeaders(request, env);
   if (request.method === "OPTIONS") {
     if (env.ALLOWED_ORIGIN && request.headers.get("Origin") !== env.ALLOWED_ORIGIN) {
       return jsonError(403, "Origin not allowed");

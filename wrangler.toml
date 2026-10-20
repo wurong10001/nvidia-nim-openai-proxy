@@ -8,3 +8,15 @@ compatibility_date = "2026-10-13"
 
 [observability]
 enabled = true
+
+[[kv_namespaces]]
+binding = "ADMIN_KV"
+# TODO: replace with actual KV namespace ID
+id = ""
+preview_id = ""
+
+[[kv_namespaces]]
+binding = "ADMIN_TEMP_KV"
+# TODO: replace with actual KV namespace ID
+id = ""
+preview_id = ""
