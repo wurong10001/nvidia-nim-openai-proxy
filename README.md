@@ -25,7 +25,7 @@
 
 - `NIM_BASE_URL`：NIM 上游 HTTPS origin，默认 `https://integrate.api.nvidia.com`。只能配置 origin，不可附加路径、查询参数或凭证。
 - `ALLOWED_ORIGIN`：限制浏览器 CORS 来源；未配置时返回 `Access-Control-Allow-Origin: *`。此设置不是 API 认证的替代品。
-- KV namespace：管理面板需要 `ADMIN_KV` 与 `ADMIN_TEMP_KV` 两个 KV 绑定，当前在 `wrangler.toml` 中为注释状态——未配置时 `/op/admin` 与 `/op/api/*` 返回 503，代理功能不受影响。在 Cloudflare 面板创建这两个 namespace 后，取消注释并填入真实 ID 即可启用。
+- KV namespace：管理面板数据（密码哈希、登录 token）存放在 KV 空间 `nvidia-nim-openai-proxy-pz` 中，已在 `wrangler.toml` 中绑定（binding 名与 `src/index.ts` 开头的 `KV_NAMESPACE` 变量一致，切换 KV 空间时两处同步修改）。部署前需把 `id` / `preview_id` 占位符替换为该 namespace 的真实 ID（Cloudflare 面板 → Storage & KV → 查看）。若运行时未绑定 KV，`/op/admin` 与 `/op/api/*` 显示“功能不可用”（503），代理功能不受影响。
 
 ## 使用
 
@@ -55,9 +55,10 @@ for await (const chunk of stream) {
 
 ## 管理面板
 
-Worker 内置一组管理端点（依赖上述两个 KV namespace）：
+Worker 内置管理面板（数据存于上述 KV 空间；未绑定 KV 时显示“功能不可用”）：
 
-- `GET /op/admin`：面板页面
+- `GET /op/admin`：面板页面。首次打开显示“设置管理员密码”，设置后显示登录框；登录后提供修改密码与退出登录
+- `GET /op/api/status`：查询管理员密码是否已初始化（`{ initialized: bool }`）
 - `POST /op/api/set-admin-pw`：首次设置管理员密码（已设置后返回 409）
 - `POST /op/api/login`：登录，返回会话 token
 - `POST /op/api/change-admin-pw`：修改密码（需 `X-Admin-Token` 头）

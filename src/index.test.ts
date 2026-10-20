@@ -1,16 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { handleRequest, type Env } from "./index";
+import { handleRequest, KV_NAMESPACE, type Env } from "./index";
+
+function makeKv(initial: Record<string, string> = {}) {
+  const store = new Map(Object.entries(initial));
+  return {
+    get: async (key: string) => store.get(key) ?? null,
+    put: async (key: string, value: string) => {
+      store.set(key, value);
+    },
+    delete: async (key: string) => {
+      store.delete(key);
+    },
+  } as unknown as KVNamespace;
+}
 
 function makeEnv(overrides: Partial<Env> = {}): Env {
-  // Proxy routes never touch the KV bindings; stubs keep the type honest.
-  const kv = {
-    get: async () => null,
-    put: async () => {},
-    delete: async () => {},
-  } as unknown as KVNamespace;
   return {
-    ADMIN_KV: kv,
-    ADMIN_TEMP_KV: kv,
+    [KV_NAMESPACE]: makeKv(),
     ...overrides,
   };
 }
@@ -134,18 +140,6 @@ describe("NVIDIA NIM OpenAI-compatible proxy", () => {
     expect(upstream).not.toHaveBeenCalled();
   });
 
-  it("returns 503 for admin routes when KV storage is not configured", async () => {
-    const response = await handleRequest(
-      new Request("https://proxy.example/op/api/protected"),
-      makeEnv({ ADMIN_KV: undefined }),
-    );
-
-    expect(response.status).toBe(503);
-    expect(await response.json()).toMatchObject({
-      error: { message: "Admin storage not configured" },
-    });
-  });
-
   it("answers health checks without revealing credential configuration", async () => {
     const response = await handleRequest(
       new Request("https://proxy.example/health"),
@@ -153,5 +147,75 @@ describe("NVIDIA NIM OpenAI-compatible proxy", () => {
     );
 
     expect(await response.json()).toEqual({ status: "ok" });
+  });
+});
+
+describe("admin panel", () => {
+  it("returns 503 for admin API routes when the KV binding is missing", async () => {
+    const response = await handleRequest(
+      new Request("https://proxy.example/op/api/protected"),
+      makeEnv({ [KV_NAMESPACE]: undefined }),
+    );
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      error: { message: "功能不可用" },
+    });
+  });
+
+  it("shows an unavailable page for /op/admin when the KV binding is missing", async () => {
+    const response = await handleRequest(
+      new Request("https://proxy.example/op/admin"),
+      makeEnv({ [KV_NAMESPACE]: undefined }),
+    );
+
+    expect(response.status).toBe(503);
+    expect(await response.text()).toContain("功能不可用");
+  });
+
+  it("serves the dashboard page when the KV binding exists", async () => {
+    const response = await handleRequest(
+      new Request("https://proxy.example/op/admin"),
+      makeEnv(),
+    );
+
+    expect(response.status).toBe(200);
+    const html = await response.text();
+    expect(html).toContain("Admin Dashboard");
+    expect(html).toContain("/op/api/login");
+    expect(html).toContain("/op/api/status");
+  });
+
+  it("reports whether the admin password is initialized", async () => {
+    const fresh = await handleRequest(
+      new Request("https://proxy.example/op/api/status"),
+      makeEnv(),
+    );
+    expect(fresh.status).toBe(200);
+    expect(await fresh.json()).toEqual({ initialized: false });
+
+    const env = makeEnv();
+    await (env[KV_NAMESPACE] as KVNamespace).put("ADMIN_PASSWORD", "hash");
+    const ready = await handleRequest(
+      new Request("https://proxy.example/op/api/status"),
+      env,
+    );
+    expect(await ready.json()).toEqual({ initialized: true });
+  });
+
+  it("rejects admin API calls with an invalid or missing token", async () => {
+    const noToken = await handleRequest(
+      new Request("https://proxy.example/op/api/protected"),
+      makeEnv(),
+    );
+    expect(noToken.status).toBe(401);
+
+    const badToken = await handleRequest(
+      new Request("https://proxy.example/op/api/protected", {
+        headers: { "X-Admin-Token": "not-a-real-token" },
+      }),
+      makeEnv(),
+    );
+    expect(badToken.status).toBe(403);
   });
 });
