@@ -1,19 +1,6 @@
 name = "nvidia-nim-openai-proxy"
-# account_id set via CF_ACCOUNT_ID env variable in CI
-# zone_id omitted; specify via "route = \"YOUR_DOMAIN/*\"" when deploying to production
 main = "src/index.ts"
 compatibility_date = "2026-10-13"
-# route = "YOUR_DOMAIN/*" # set after domain configured in Cloudflare
-# workers_dev = false  # uncomment if you want production route
 
 [observability]
 enabled = true
-
-# KV 空间（Admin 面板数据：管理员密码哈希与登录 token）。
-# binding 名须与 src/index.ts 开头的 KV_NAMESPACE 变量一致；
-# 切换 KV 空间时两处同步修改。
-[[kv_namespaces]]
-binding = "nvidia-nim-openai-proxy-pz"
-# TODO: 填入该 namespace 的真实 ID（Cloudflare 面板 → Storage & KV → 查看，32 位十六进制）
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
-preview_id = "REPLACE_WITH_KV_NAMESPACE_ID"

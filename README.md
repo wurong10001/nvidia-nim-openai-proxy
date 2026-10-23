@@ -1,42 +1,61 @@
-# NVIDIA NIM → OpenAI API Proxy（Cloudflare Worker）
+# NVIDIA NIM OpenAI API Proxy
 
-将 OpenAI SDK 的请求通过 Cloudflare 全球边缘网络转发到 NVIDIA NIM。NIM 提供 OpenAI 兼容接口，因此代理保留请求/响应格式，并直接流式转发 SSE，不缓存生成结果。
+A lightweight Cloudflare Worker that forwards supported OpenAI-compatible API requests to NVIDIA NIM. It passes response bodies through without buffering, including server-sent events (SSE).
 
-## 支持接口
+## Supported endpoints
 
+- `GET /health` — health check; no authentication required
 - `GET /v1/models`
-- `POST /v1/chat/completions`（包含流式 `stream: true`）
+- `POST /v1/chat/completions` — supports `stream: true`
 - `POST /v1/completions`
 - `POST /v1/embeddings`
-- `GET /health`（不需要认证）
 
-此 Worker 负责边缘代理与密钥隔离，不会改变模型能力或绕过 NIM 的限流、计费和区域限制。实际延迟取决于客户端、Cloudflare 边缘节点及 NIM 上游网络。
+All other paths are rejected. The proxy does not provide an admin UI, admin API, session management, or KV-backed state.
 
-## 部署
+## Configuration
 
-1. 安装 Node.js 22+（wrangler 4.x 最低要求），然后运行 `npm ci`。
-2. 登录 Cloudflare：`npx wrangler login`。
-3. （可选）设置上游 NIM API Key：`npx wrangler secret put NIM_API_KEY`。
-4. 部署：`npm run deploy`。
+Set `NIM_API_KEY` as a Cloudflare Worker secret to use a shared upstream key:
 
-密钥解析规则：设置了 `NIM_API_KEY` 时，所有请求共用该 key 访问 NIM，客户端无需携带密钥——此时 Worker 地址本身就是凭证，切勿公开；未设置时，客户端必须在请求头 `Authorization: Bearer <nim-key>` 中自带 NIM key。不要将任何密钥提交到 Git。
+```sh
+npx wrangler secret put NIM_API_KEY
+```
 
-可选配置：
+When set, the Worker uses this key for every upstream request and replaces any client-supplied `Authorization` header. Clients do not need their own NVIDIA key in this mode. **Anyone who can reach a publicly accessible Worker can use your NIM quota.** Protect a shared-key deployment with Cloudflare Access or another access-control layer, or keep the Worker private.
 
-- `NIM_BASE_URL`：NIM 上游 HTTPS origin，默认 `https://integrate.api.nvidia.com`。只能配置 origin，不可附加路径、查询参数或凭证。
-- `ALLOWED_ORIGIN`：限制浏览器 CORS 来源；未配置时返回 `Access-Control-Allow-Origin: *`。此设置不是 API 认证的替代品。
-- KV namespace：管理面板数据（密码哈希、登录 token）存放在 KV 空间 `nvidia-nim-openai-proxy-pz` 中，已在 `wrangler.toml` 中绑定（binding 名与 `src/index.ts` 开头的 `KV_NAMESPACE` 变量一致，切换 KV 空间时两处同步修改）。部署前需把 `id` / `preview_id` 占位符替换为该 namespace 的真实 ID（Cloudflare 面板 → Storage & KV → 查看）。若运行时未绑定 KV，`/op/admin` 与 `/op/api/*` 显示“功能不可用”（503），代理功能不受影响。
+If `NIM_API_KEY` is not set, clients must provide their NVIDIA NIM key in the `Authorization: Bearer <key>` request header.
 
-## 使用
+Optional environment variables:
 
-将 OpenAI SDK 的 `baseURL` 指向 Worker 地址，并按上面的密钥解析规则提供 API Key：
+- `NIM_BASE_URL` — upstream HTTPS origin; defaults to `https://integrate.api.nvidia.com`. Only an origin is accepted (no path, query, or credentials).
+- `ALLOWED_ORIGIN` — restricts browser CORS to this origin. If unset, CORS allows all origins; CORS is not authentication.
+
+Configure these variables in the Cloudflare Worker settings. For local development, create an untracked `.dev.vars` file:
+
+```dotenv
+NIM_API_KEY=your-nvidia-nim-key
+# NIM_BASE_URL=https://integrate.api.nvidia.com
+# ALLOWED_ORIGIN=https://your-app.example
+```
+
+## Deploy with Cloudflare Workers Builds
+
+Connect this GitHub repository in Cloudflare Workers Builds and select `main` as the production branch. Configure the deployment command as `npm run deploy`; Cloudflare then builds and deploys the Worker on pushes to that branch. GitHub Actions runs type checks and tests only and does not need Cloudflare deployment credentials.
+
+For a one-time local deployment, install Node.js 22 or later, run `npm ci`, authenticate with `npx wrangler login`, then run:
+
+```sh
+npm run deploy
+```
+
+## Use with the OpenAI SDK
+
+Set the SDK base URL to your Worker URL. When the Worker has a shared `NIM_API_KEY`, the SDK still requires a non-empty `apiKey`, but the Worker replaces that value with its configured secret. Otherwise, provide your own NVIDIA NIM key.
 
 ```js
 import OpenAI from "openai";
 
 const client = new OpenAI({
   baseURL: "https://<worker-name>.<account>.workers.dev/v1",
-  // 部署了 NIM_API_KEY 时此处可填任意占位值；否则填入客户端自己的 NIM key
   apiKey: process.env.NIM_API_KEY ?? "placeholder",
 });
 
@@ -51,35 +70,15 @@ for await (const chunk of stream) {
 }
 ```
 
-模型名称及请求字段应使用 NVIDIA NIM 支持的值。可通过 `/v1/models` 查询上游可用模型。
+Use model names and request fields supported by NVIDIA NIM. `GET /v1/models` lists the models available upstream.
 
-## 管理面板
+## Local development and checks
 
-Worker 内置管理面板（数据存于上述 KV 空间；未绑定 KV 时显示“功能不可用”）：
-
-- `GET /op/admin`：面板页面。首次打开显示“设置管理员密码”，设置后显示登录框；登录后提供修改密码与退出登录
-- `GET /op/api/status`：查询管理员密码是否已初始化（`{ initialized: bool }`）
-- `POST /op/api/set-admin-pw`：首次设置管理员密码（已设置后返回 409）
-- `POST /op/api/login`：登录，返回会话 token
-- `POST /op/api/change-admin-pw`：修改密码（需 `X-Admin-Token` 头）
-- `GET /op/api/protected`：鉴权测试端点
-
-## 本地开发与检查
-
-在项目根目录创建 `.dev.vars`（勿提交）：
-
-```dotenv
-# 可选：不设置则请求需在 Authorization 头中自带 NIM key
-NIM_API_KEY=your-nvidia-nim-key
+```sh
+npm ci
+npm run dev
+npm run typecheck
+npm test
 ```
 
-运行 `npm run dev`、`npm run typecheck` 和 `npm test`。
-
-## GitHub Actions 自动部署
-
-在 GitHub 仓库设置以下 Actions secrets 后，推送到 `main` 会部署 Worker：
-
-- `CLOUDFLARE_API_TOKEN`：拥有此 Worker 部署权限的 Cloudflare API Token。
-- `CLOUDFLARE_ACCOUNT_ID`：Cloudflare Account ID。
-
-`NIM_API_KEY`（如使用）仍应使用 `wrangler secret put` 配置在 Cloudflare Worker，而不是放进 GitHub Actions。
+Check a deployed Worker with `GET /health`. This confirms the Worker is responding; it does not verify that NVIDIA NIM credentials or model requests are working.
